@@ -17,13 +17,15 @@ jobs:
       - name: Unzip project
         run: |
           unzip -q CorridaRapida-Android.zip
-          PROJECT_DIR=$(find . -maxdepth 1 -type d -not -name '.' -not -name '.*' | head -n 1)
-          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
+          # Renomeia qualquer pasta extraída para 'projeto_base' para padronizar
+          FOLDER=$(ls -d */ | grep -vE 'app|gradle|.git|output_apk' | head -n 1)
+          if [ -d "$FOLDER" ]; then
+            mv "$FOLDER" projeto_base
+          fi
       - name: Aplicar versao 8 com Token Temporal de 30 Dias
         run: |
-          PROJ="${{ env.PROJECT_DIR }}"
-          D="$PROJ/app/src/main"
-          sed -i 's/versionCode = 1/versionCode = 8/; s/versionName = "1.0"/versionName = "8"/' "$PROJ/app/build.gradle.kts"
+          D="projeto_base/app/src/main"
+          sed -i 's/versionCode = 1/versionCode = 8/; s/versionName = "1.0"/versionName = "8"/' "projeto_base/app/build.gradle.kts"
           sed -i 's/<application/<application android:icon="@mipmap\/ic_launcher" android:roundIcon="@mipmap\/ic_launcher"/' "$D/AndroidManifest.xml"
           
           mkdir -p "$D/res/mipmap-anydpi-v26" "$D/res/drawable" "$D/res/values" "$D/res/xml" "$D/java/com/example/corridarapida"
@@ -79,7 +81,7 @@ jobs:
               android:notificationTimeout="100" />
           EOF
 
-          # Criação da MainActivity com Verificação de Validade de 30 Dias (v8)
+          # MainActivity v8
           cat > "$D/java/com/example/corridarapida/MainActivity.kt" << 'EOF'
           package com.example.corridarapida
 
@@ -214,7 +216,7 @@ jobs:
           }
           EOF
 
-          # Criação do UberService v8 com validação de prazo
+          # UberService v8
           cat > "$D/java/com/example/corridarapida/UberService.kt" << 'EOF'
           package com.example.corridarapida
 
@@ -244,41 +246,3 @@ jobs:
               private val titulos = arrayOf("ACEITA", "LIMITE", "RECUSA")
               private val coresFundo = intArrayOf(
                   Color.parseColor("#E60E6638"),
-                  Color.parseColor("#E6B86B00"),
-                  Color.parseColor("#E6C62828")
-              )
-              
-              private var cardLayout: LinearLayout? = null
-              private var txtVeredito: TextView? = null
-              private var txtMetricas: TextView? = null
-              private var txtDetalhes: TextView? = null
-              
-              private var ultimoProcessamento = 0L
-              private val handler = Handler(Looper.getMainLooper())
-              private var runnableAnalise: Runnable? = null
-              private var runnableEsconder: Runnable? = null
-
-              private fun estaAtivo(): Boolean {
-                  val sp = getSharedPreferences("cfg", MODE_PRIVATE)
-                  val expMillis = sp.getLong("exp_millis", 0L)
-                  return expMillis > System.currentTimeMillis()
-              }
-
-              override fun onServiceConnected() {
-                  super.onServiceConnected()
-                  if (!estaAtivo()) return
-
-                  mostrar("v8 · SERVIÇO ATIVO", "Aguardando nova corrida...", "", cinza)
-                  handler.postDelayed({
-                      if (txtVeredito?.text?.toString()?.contains("SERVIÇO ATIVO") == true) esconder()
-                  }, 3000)
-              }
-
-              override fun onAccessibilityEvent(e: AccessibilityEvent) {
-                  if (!estaAtivo()) return
-
-                  val pkg = e.packageName?.toString() ?: return
-                  if (pkg == packageName) return
-                  if (pkg != uber) { esconder(); return }
-
-                  runnableAnalise?.let { handler.remove
