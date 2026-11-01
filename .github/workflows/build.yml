@@ -16,7 +16,7 @@ jobs:
           gradle-version: 8.7
       - name: Unzip project
         run: unzip -q CorridaRapida-Android.zip
-      - name: Aplicar alteracoes e build
+      - name: Aplicar versao corrigida e build
         run: |
           D=CorridaRapida/app/src/main
           sed -i 's/versionCode = 1/versionCode = 5/; s/versionName = "1.0"/versionName = "5"/' CorridaRapida/app/build.gradle.kts
@@ -58,7 +58,7 @@ jobs:
           cat > $D/res/values/strings.xml << 'EOF'
           <resources>
               <string name="app_name">Corrida Rápida v5</string>
-              <string name="svc_desc">Lê a oferta de corrida e mostra veredito flutuante.</string>
+              <string name="svc_desc">Lê a oferta de corrida na tela do app de motorista e mostra um veredito flutuante (aceita, limite ou recusa).</string>
           </resources>
           EOF
 
@@ -72,6 +72,262 @@ jobs:
               android:isAccessibilityTool="true"
               android:description="@string/svc_desc"
               android:notificationTimeout="100" />
+          EOF
+
+          # Criação do UberService sem erros de compilação
+          cat > $D/java/com/example/corridarapida/UberService.kt << 'EOF'
+          package com.example.corridarapida
+
+          import android.accessibilityservice.AccessibilityService
+          import android.graphics.Color
+          import android.graphics.PixelFormat
+          import android.graphics.drawable.GradientDrawable
+          import android.os.Handler
+          import android.os.Looper
+          import android.view.Gravity
+          import android.view.WindowManager
+          import android.view.accessibility.AccessibilityEvent
+          import android.view.accessibility.AccessibilityNodeInfo
+          import android.widget.LinearLayout
+          import android.widget.TextView
+
+          class UberService : AccessibilityService() {
+
+              private val uber = "com.ubercab.driver"
+              private val totalRx = Regex("(\\d+)\\s*min\\w*\\s*[•·]\\s*([\\d.,]+)\\s*km")
+              private val trechoRx = Regex("(\\d+)\\s*min\\w*\\s*\\(([\\d.,]+)\\s*km\\)")
+              private val precoRx = Regex("R\\$\\s*(\\d+(?:[.,]\\d+)?)")
+              private val notaRx = Regex("\\b([1-5][.,]\\d{1,2})\\s*\\(\\d[\\d.,]*\\)")
+              private val notaLinhaRx = Regex("^([1-5][.,]\\d{2})$")
+              
+              private val cinza = Color.rgb(50, 50, 50)
+              private val titulos = arrayOf("ACEITA", "LIMITE", "RECUSA")
+              private val coresFundo = intArrayOf(
+                  Color.parseColor("#E60E6638"),
+                  Color.parseColor("#E6B86B00"),
+                  Color.parseColor("#E6C62828")
+              )
+              
+              private var cardLayout: LinearLayout? = null
+              private var txtVeredito: TextView? = null
+              private var txtMetricas: TextView? = null
+              private var txtDetalhes: TextView? = null
+              
+              private var ultimoProcessamento = 0L
+              private val handler = Handler(Looper.getMainLooper())
+              private var runnableAnalise: Runnable? = null
+              private var runnableEsconder: Runnable? = null
+
+              override fun onServiceConnected() {
+                  super.onServiceConnected()
+                  mostrar("v5 · SERVIÇO ATIVO", "Aguardando nova corrida...", "", cinza)
+                  handler.postDelayed({
+                      if (txtVeredito?.text?.toString()?.contains("SERVIÇO ATIVO") == true) esconder()
+                  }, 3000)
+              }
+
+              override fun onAccessibilityEvent(e: AccessibilityEvent) {
+                  val pkg = e.packageName?.toString() ?: return
+                  if (pkg == packageName) return
+                  if (pkg != uber) { esconder(); return }
+
+                  runnableAnalise?.let { handler.removeCallbacks(it) }
+                  runnableAnalise = Runnable { processarTela() }
+                  handler.postDelayed(runnableAnalise!!, 100)
+              }
+
+              private fun processarTela() {
+                  val agora = System.currentTimeMillis()
+                  if (agora - ultimoProcessamento < 150) return
+                  ultimoProcessamento = agora
+
+                  val sb = StringBuilder()
+                  var n = 0
+                  val raizes = ArrayList<AccessibilityNodeInfo>()
+                  try { windows?.forEach { w -> w.root?.let { raizes.add(it) } } } catch (_: Exception) {}
+                  rootInActiveWindow?.let { raizes.add(it) }
+
+                  for (r in raizes) {
+                      if (r.packageName?.toString() == uber) n += coletar(r, sb)
+                  }
+
+                  analisar(sb.toString().replace('\u00A0', ' ').replace('\u202F', ' '), n)
+              }
+
+              private fun coletar(n: AccessibilityNodeInfo?, sb: StringBuilder): Int {
+                  if (n == null) return 0
+                  var c = 0
+                  n.text?.let { sb.append(it).append('\n'); c++ }
+                  n.contentDescription?.let { sb.append(it).append('\n'); c++ }
+                  for (i in 0 until n.childCount) c += coletar(n.getChild(i), sb)
+                  return c
+              }
+
+              private fun num(s: String): Double =
+                  (if (s.contains(",")) s.replace(".", "").replace(",", ".") else s).toDoubleOrNull() ?: 0.0
+
+              private fun analisar(txt: String, n: Int) {
+                  if (n == 0) { tentarEsconderComAtraso(); return }
+                  val oferta = txt.contains("R$") && (txt.contains("km") || txt.contains("min"))
+                  if (!oferta) { tentarEsconderComAtraso(); return }
+
+                  val linhas = txt.lines().map { it.trim() }
+                  val preco = linhas.firstNotNullOfOrNull { l -> precoRx.matchEntire(l)?.groupValues?.get(1) }?.let(::num)
+                      ?: linhas.firstOrNull { it.contains("R$") && !it.contains("/km") && !it.startsWith("+") }
+                          ?.let { precoRx.find(it)?.groupValues?.get(1) }?.let(::num)
+
+                  val trechos = trechoRx.findAll(txt).toList()
+                  val tot = totalRx.find(txt)
+                  var min = 0.0
+                  var km = 0.0
+
+                  if (tot != null) {
+                      min = tot.groupValues[1].toDouble()
+                      km = num(tot.groupValues[2])
+                  } else if (trechos.size >= 2) {
+                      min = trechos.take(2).sumOf { it.groupValues[1].toDouble() }
+                      km = trechos.take(2).sumOf { num(it.groupValues[2]) }
+                  } else {
+                      val kmMatch = Regex("([\\d.,]+)\\s*km").find(txt)
+                      val minMatch = Regex("(\\d+)\\s*min").find(txt)
+                      if (kmMatch != null && minMatch != null) {
+                          km = num(kmMatch.groupValues[1])
+                          min = minMatch.groupValues[1].toDouble()
+                      }
+                  }
+
+                  if (preco == null || preco <= 0 || min <= 0 || km <= 0) {
+                      return
+                  }
+
+                  val emb: Double? = if (trechos.size >= 2) num(trechos[0].groupValues[2]).takeIf { it > 0 && it < km } else null
+                  val nota: Double? = notaRx.find(txt)?.groupValues?.get(1)?.replace(',', '.')?.toDoubleOrNull()
+                      ?: linhas.firstNotNullOfOrNull { notaLinhaRx.matchEntire(it)?.groupValues?.get(1) }?.replace(',', '.')?.toDoubleOrNull()
+
+                  val sp = getSharedPreferences("cfg", MODE_PRIVATE)
+                  val metaKm = sp.getFloat("minKm", 1.8f)
+                  val metaH = sp.getFloat("minH", 35f)
+                  val minNota = sp.getFloat("minNota", 4.7f)
+                  val maxEmb = sp.getFloat("maxEmb", 2.0f)
+
+                  val rkm = preco / km
+                  val rh = preco / (min / 60.0)
+                  val okKm = rkm >= metaKm
+                  val okH = rh >= metaH
+                  val falhaNota = minNota > 0 && nota != null && nota < minNota
+                  val falhaEmb = maxEmb > 0 && emb != null && emb > maxEmb
+
+                  var nivel = if (okKm && okH) 0 else if (okKm || okH) 1 else 2
+                  if (falhaNota) nivel++
+                  if (falhaEmb) nivel++
+                  if (nivel > 2) nivel = 2
+
+                  val metricasStr = "R$ %.2f/km  •  R$ %.0f/h".format(rkm, rh)
+                  
+                  val extras = ArrayList<String>()
+                  if (nota != null) extras.add((if (falhaNota) "⚠️ " else "⭐ ") + "%.2f".format(nota))
+                  if (emb != null) extras.add((if (falhaEmb) "⚠️ " else "🚗 ") + "Embarque: %.1f km".format(emb))
+                  val detalhesStr = extras.joinToString("   ")
+
+                  runnableEsconder?.let { handler.removeCallbacks(it) }
+                  mostrar(titulos[nivel], metricasStr, detalhesStr, coresFundo[nivel])
+              }
+
+              private fun tentarEsconderComAtraso() {
+                  if (cardLayout == null) return
+                  runnableEsconder?.let { handler.removeCallbacks(it) }
+                  runnableEsconder = Runnable {
+                      esconder()
+                  }
+                  handler.postDelayed(runnableEsconder!!, 600)
+              }
+
+              private fun mostrar(veredito: String, metricas: String, detalhes: String, corFundo: Int) {
+                  val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+                  
+                  if (cardLayout == null) {
+                      val context = this
+                      cardLayout = LinearLayout(context).apply {
+                          orientation = LinearLayout.VERTICAL
+                          setPadding(48, 36, 48, 36)
+                          
+                          background = GradientDrawable().apply {
+                              shape = GradientDrawable.RECTANGLE
+                              cornerRadius = 32f
+                          }
+                          
+                          txtVeredito = TextView(context).apply {
+                              setTextColor(Color.WHITE)
+                              textSize = 26f
+                              setTypeface(null, android.graphics.Typeface.BOLD)
+                              gravity = Gravity.CENTER
+                          }
+                          addView(txtVeredito)
+
+                          txtMetricas = TextView(context).apply {
+                              setTextColor(Color.WHITE)
+                              textSize = 20f
+                              setTypeface(null, android.graphics.Typeface.BOLD)
+                              gravity = Gravity.CENTER
+                              setPadding(0, 10, 0, 6)
+                          }
+                          addView(txtMetricas)
+
+                          txtDetalhes = TextView(context).apply {
+                              setTextColor(Color.parseColor("#F0F0F0"))
+                              textSize = 15f
+                              gravity = Gravity.CENTER
+                          }
+                          addView(txtDetalhes)
+                      }
+
+                      val lp = WindowManager.LayoutParams(
+                          WindowManager.LayoutParams.WRAP_CONTENT,
+                          WindowManager.LayoutParams.WRAP_CONTENT,
+                          WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                          WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                              WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                          PixelFormat.TRANSLUCENT
+                      ).apply { 
+                          gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                          y = 120 
+                      }
+                      
+                      try {
+                          wm.addView(cardLayout, lp)
+                      } catch (_: Exception) {}
+                  }
+
+                  (cardLayout?.background as? GradientDrawable)?.setColor(corFundo)
+                  txtVeredito?.text = veredito
+                  txtMetricas?.text = metricas
+                  
+                  if (detalhes.isNotEmpty()) {
+                      txtDetalhes?.text = detalhes
+                      txtDetalhes?.visibility = android.view.View.VISIBLE
+                  } else {
+                      txtDetalhes?.visibility = android.view.View.GONE
+                  }
+                  
+                  cardLayout?.visibility = android.view.View.VISIBLE
+              }
+
+              private fun esconder() {
+                  handler.removeCallbacksAndMessages(null)
+                  cardLayout?.let {
+                      try { 
+                          (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(it) 
+                      } catch (_: Exception) {}
+                      cardLayout = null
+                      txtVeredito = null
+                      txtMetricas = null
+                      txtDetalhes = null
+                  }
+              }
+
+              override fun onInterrupt() { esconder() }
+              override fun onDestroy() { esconder(); super.onDestroy() }
+          }
           EOF
           
       - name: Build
