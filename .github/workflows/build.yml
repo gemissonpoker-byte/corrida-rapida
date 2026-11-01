@@ -21,7 +21,9 @@ jobs:
           D=CorridaRapida/app/src/main
           sed -i 's/versionCode = 1/versionCode = 5/; s/versionName = "1.0"/versionName = "5"/' CorridaRapida/app/build.gradle.kts
           sed -i 's/<application/<application android:icon="@mipmap\/ic_launcher" android:roundIcon="@mipmap\/ic_launcher"/' $D/AndroidManifest.xml
-          mkdir -p $D/res/mipmap-anydpi-v26$D/res/drawable
+          
+          # Garante que as pastas de recursos existem antes de criar os ficheiros
+          mkdir -p $D/res/mipmap-anydpi-v26 $D/res/drawable $D/res/values $D/res/xml $D/java/com/example/corridarapida
           
           cat > $D/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
@@ -76,7 +78,7 @@ jobs:
               android:notificationTimeout="100" />
           EOF
 
-          # Criação automática do UberService.kt com visual ampliado
+          # Criação automática do UberService.kt com visual ampliado e estável
           cat > $D/java/com/example/corridarapida/UberService.kt <<'EOF'
           package com.example.corridarapida
 
@@ -251,7 +253,6 @@ jobs:
                       val context = this
                       cardLayout = LinearLayout(context).apply {
                           orientation = LinearLayout.VERTICAL
-                          // Espaçamento interno maior para dar corpo ao card
                           setPadding(48, 36, 48, 36)
                           
                           background = GradientDrawable().apply {
@@ -261,7 +262,7 @@ jobs:
                           
                           txtVeredito = TextView(context).apply {
                               setTextColor(Color.WHITE)
-                              textSize = 26f // Fonte bem maior para o veredito
+                              textSize = 26f
                               setTypeface(null, android.graphics.Typeface.BOLD)
                               gravity = Gravity.CENTER
                           }
@@ -269,5 +270,76 @@ jobs:
 
                           txtMetricas = TextView(context).apply {
                               setTextColor(Color.WHITE)
-                              textSize = 20f // Fonte ampliada para R$/km e R$/h
-                              setTypeface(null, android.graphics
+                              textSize = 20f
+                              setTypeface(null, android.graphics.Typeface.BOLD)
+                              gravity = Gravity.CENTER
+                              setPadding(0, 10, 0, 6)
+                          }
+                          addView(txtMetricas)
+
+                          txtDetalhes = TextView(context).apply {
+                              setTextColor(Color.parseColor("#F0F0F0"))
+                              textSize = 15f
+                              gravity = Gravity.CENTER
+                          }
+                          addView(txtDetalhes)
+                      }
+
+                      val lp = WindowManager.LayoutParams(
+                          WindowManager.LayoutParams.WRAP_CONTENT,
+                          WindowManager.LayoutParams.WRAP_CONTENT,
+                          WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                          WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                              WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                          PixelFormat.TRANSLUCENT
+                      ).apply { 
+                          gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                          y = 120 
+                      }
+                      
+                      try {
+                          wm.addView(cardLayout, lp)
+                      } catch (_: Exception) {}
+                  }
+
+                  (cardLayout?.background as? GradientDrawable)?.setColor(corFundo)
+                  txtVeredito?.text = veredito
+                  txtMetricas?.text = metricas
+                  
+                  if (detalhes.isNotEmpty()) {
+                      txtDetalhes?.text = detalhes
+                      txtDetalhes?.visibility = android.view.View.VISIBLE
+                  } else {
+                      txtDetalhes?.visibility = android.view.View.GONE
+                  }
+                  
+                  cardLayout?.visibility = android.view.View.VISIBLE
+              }
+
+              private fun esconder() {
+                  handler.removeCallbacksAndMessages(null)
+                  cardLayout?.let {
+                      try { 
+                          (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(it) 
+                      } catch (_: Exception) {}
+                      cardLayout = null
+                      txtVeredito = null
+                      txtMetricas = null
+                      txtDetalhes = null
+                  }
+              }
+
+              override fun onInterrupt() { esconder() }
+              override fun onDestroy() { esconder(); super.onDestroy() }
+          }
+          EOF
+          
+      - name: Build
+        working-directory: CorridaRapida
+        run: gradle assembleDebug --no-daemon
+      - name: Renomear
+        run: cp CorridaRapida/app/build/outputs/apk/debug/app-debug.apk CorridaRapida/app/build/outputs/apk/debug/CorridaRapida-v5.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CorridaRapida-v5
+          path: CorridaRapida/app/build/outputs/apk/debug/CorridaRapida-v5.apk
