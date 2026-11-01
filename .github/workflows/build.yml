@@ -1,4 +1,4 @@
-name: Build APK v3
+name: Build APK v5
 on:
   push:
   workflow_dispatch:
@@ -16,13 +16,46 @@ jobs:
           gradle-version: 8.7
       - name: Unzip project
         run: unzip -q CorridaRapida-Android.zip
-      - name: Aplicar versao 3
+      - name: Aplicar versao 5
         run: |
           D=CorridaRapida/app/src/main
-          sed -i 's/versionCode = 1/versionCode = 3/; s/versionName = "1.0"/versionName = "3"/' CorridaRapida/app/build.gradle.kts
+          sed -i 's/versionCode = 1/versionCode = 5/; s/versionName = "1.0"/versionName = "5"/' CorridaRapida/app/build.gradle.kts
+          sed -i 's/<application/<application android:icon="@mipmap\/ic_launcher" android:roundIcon="@mipmap\/ic_launcher"/' $D/AndroidManifest.xml
+          mkdir -p $D/res/mipmap-anydpi-v26 $D/res/drawable
+          cat > $D/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/ic_bg"/>
+              <foreground android:drawable="@drawable/ic_fg"/>
+          </adaptive-icon>
+          EOF
+          cat > $D/res/drawable/ic_fg.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path android:fillColor="#FFFFFF" android:pathData="M34,52h40a4,4 0 0 1 4,4v10a4,4 0 0 1 -4,4h-40a4,4 0 0 1 -4,-4v-10a4,4 0 0 1 4,-4z"/>
+              <path android:fillColor="#FFFFFF" android:pathData="M39,52L44,40H64L69,52Z"/>
+              <path android:fillColor="#1B1B1B" android:pathData="M43,50L46,42H62L65,50Z"/>
+              <path android:fillColor="#1B1B1B" android:pathData="M42,63.5m-6.5,0a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0"/>
+              <path android:fillColor="#1B1B1B" android:pathData="M66,63.5m-6.5,0a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0"/>
+              <path android:fillColor="#FFFFFF" android:pathData="M42,63.5m-3.5,0a3.5,3.5 0 1,0 7,0a3.5,3.5 0 1,0 -7,0"/>
+              <path android:fillColor="#FFFFFF" android:pathData="M66,63.5m-3.5,0a3.5,3.5 0 1,0 7,0a3.5,3.5 0 1,0 -7,0"/>
+              <path android:fillColor="#12A150" android:pathData="M74,38m-12,0a12,12 0 1,0 24,0a12,12 0 1,0 -24,0"/>
+              <path android:strokeColor="#FFFFFF" android:strokeWidth="3.2" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M68,38.5L72.5,43L80,34"/>
+          </vector>
+          EOF
+          cat > $D/res/values/ic_colors.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <color name="ic_bg">#1B1B1B</color>
+          </resources>
+          EOF
           cat > $D/res/values/strings.xml <<'EOF'
           <resources>
-              <string name="app_name">Corrida Rápida v3</string>
+              <string name="app_name">Corrida Rápida v5</string>
               <string name="svc_desc">Lê a oferta de corrida na tela do app de motorista e mostra um veredito flutuante (aceita, limite ou recusa).</string>
           </resources>
           EOF
@@ -36,6 +69,62 @@ jobs:
               android:isAccessibilityTool="true"
               android:description="@string/svc_desc"
               android:notificationTimeout="100" />
+          EOF
+          cat > $D/java/com/example/corridarapida/MainActivity.kt <<'EOF'
+          package com.example.corridarapida
+
+          import android.app.Activity
+          import android.content.Intent
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.text.InputType
+          import android.widget.*
+
+          class MainActivity : Activity() {
+              override fun onCreate(b: Bundle?) {
+                  super.onCreate(b)
+                  val sp = getSharedPreferences("cfg", MODE_PRIVATE)
+                  val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(48, 48, 48, 48) }
+
+                  fun campo(rotulo: String, chave: String, padrao: Float): EditText {
+                      col.addView(TextView(this).apply { text = rotulo })
+                      return EditText(this).apply {
+                          inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                          setText(sp.getFloat(chave, padrao).toString())
+                          col.addView(this)
+                      }
+                  }
+                  fun ler(e: EditText, d: Float): Float = e.text.toString().replace(",", ".").toFloatOrNull() ?: d
+
+                  val km = campo("Mínimo R$/km", "minKm", 1.8f)
+                  val h = campo("Mínimo R$/hora", "minH", 35f)
+                  val nota = campo("Nota mínima do passageiro (0 desliga)", "minNota", 4.7f)
+                  val emb = campo("Embarque máximo em km (0 desliga)", "maxEmb", 2.0f)
+
+                  col.addView(Button(this).apply {
+                      text = "Salvar metas"
+                      setOnClickListener {
+                          sp.edit()
+                              .putFloat("minKm", ler(km, 1.8f))
+                              .putFloat("minH", ler(h, 35f))
+                              .putFloat("minNota", ler(nota, 4.7f))
+                              .putFloat("maxEmb", ler(emb, 2.0f))
+                              .apply()
+                          Toast.makeText(this@MainActivity, "Salvo", Toast.LENGTH_SHORT).show()
+                      }
+                  })
+                  col.addView(TextView(this).apply {
+                      text = "\nAtive o serviço \"Corrida Rápida v5\" em Acessibilidade. Depois é só abrir o app do Uber Driver."
+                  })
+                  col.addView(Button(this).apply {
+                      text = "Abrir Acessibilidade"
+                      setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+                  })
+                  val sv = ScrollView(this)
+                  sv.addView(col)
+                  setContentView(sv)
+              }
+          }
           EOF
           cat > $D/java/com/example/corridarapida/UberService.kt <<'EOF'
           package com.example.corridarapida
@@ -57,14 +146,18 @@ jobs:
               private val totalRx = Regex("(\\d+)\\s*min\\w*\\s*[•·]\\s*([\\d.,]+)\\s*km")
               private val trechoRx = Regex("(\\d+)\\s*min\\w*\\s*\\(([\\d.,]+)\\s*km\\)")
               private val precoRx = Regex("R\\$\\s*(\\d+(?:[.,]\\d+)?)")
+              private val notaRx = Regex("\\b([1-5][.,]\\d{1,2})\\s*\\(\\d[\\d.,]*\\)")
+              private val notaLinhaRx = Regex("^([1-5][.,]\\d{2})$")
               private val cinza = Color.rgb(90, 90, 90)
+              private val titulos = arrayOf("ACEITA", "LIMITE", "RECUSA")
+              private val cores = intArrayOf(Color.rgb(18, 161, 80), Color.rgb(224, 154, 0), Color.rgb(211, 47, 47))
               private var faixa: TextView? = null
               private var ultimo = 0L
               private val h = Handler(Looper.getMainLooper())
 
               override fun onServiceConnected() {
                   super.onServiceConnected()
-                  mostrar("v3 · serviço ativo", cinza, 14f)
+                  mostrar("v5 · serviço ativo", cinza, 14f)
                   h.postDelayed({
                       if (faixa?.text?.toString()?.contains("serviço ativo") == true) esconder()
                   }, 3000)
@@ -101,43 +194,57 @@ jobs:
                   (if (s.contains(",")) s.replace(".", "").replace(",", ".") else s).toDoubleOrNull() ?: 0.0
 
               private fun analisar(txt: String, n: Int) {
-                  if (n == 0) { mostrar("v3 · Uber sem texto legível", cinza, 14f); return }
-                  if (!txt.contains("R$")) { mostrar("v3 · Uber aberto ($n textos)", cinza, 14f); return }
+                  if (n == 0) { esconder(); return }
+                  val oferta = txt.contains("R$") && txt.contains("km") && txt.contains("min")
+                  if (!oferta) { esconder(); return }
                   val linhas = txt.lines().map { it.trim() }
                   val preco = linhas.firstNotNullOfOrNull { l -> precoRx.matchEntire(l)?.groupValues?.get(1) }?.let(::num)
                       ?: linhas.firstOrNull { it.contains("R$") && !it.contains("/km") && !it.startsWith("+") }
                           ?.let { precoRx.find(it)?.groupValues?.get(1) }?.let(::num)
+                  val trechos = trechoRx.findAll(txt).toList()
+                  val tot = totalRx.find(txt)
                   var min = 0.0
                   var km = 0.0
-                  val tot = totalRx.find(txt)
                   if (tot != null) {
                       min = tot.groupValues[1].toDouble()
                       km = num(tot.groupValues[2])
-                  } else {
-                      val t = trechoRx.findAll(txt).take(2).toList()
-                      if (t.size == 2) {
-                          min = t.sumOf { it.groupValues[1].toDouble() }
-                          km = t.sumOf { num(it.groupValues[2]) }
-                      }
+                  } else if (trechos.size >= 2) {
+                      min = trechos.take(2).sumOf { it.groupValues[1].toDouble() }
+                      km = trechos.take(2).sumOf { num(it.groupValues[2]) }
                   }
                   if (preco == null || preco <= 0 || min <= 0 || km <= 0) {
                       val amostra = linhas.filter { it.contains("R$") || it.contains("km") }.take(3).joinToString(" | ").take(120)
-                      mostrar("v3 · Oferta não lida\n$amostra", cinza, 13f)
+                      mostrar("v5 · Oferta não lida\n$amostra", cinza, 13f)
                       return
                   }
+                  val emb: Double? = if (trechos.size >= 2) num(trechos[0].groupValues[2]).takeIf { it > 0 && it < km } else null
+                  val nota: Double? = notaRx.find(txt)?.groupValues?.get(1)?.replace(',', '.')?.toDoubleOrNull()
+                      ?: linhas.firstNotNullOfOrNull { notaLinhaRx.matchEntire(it)?.groupValues?.get(1) }?.replace(',', '.')?.toDoubleOrNull()
+
                   val sp = getSharedPreferences("cfg", MODE_PRIVATE)
                   val metaKm = sp.getFloat("minKm", 1.8f)
                   val metaH = sp.getFloat("minH", 35f)
+                  val minNota = sp.getFloat("minNota", 4.7f)
+                  val maxEmb = sp.getFloat("maxEmb", 2.0f)
+
                   val rkm = preco / km
                   val rh = preco / (min / 60.0)
                   val okKm = rkm >= metaKm
                   val okH = rh >= metaH
-                  val (titulo, cor) = when {
-                      okKm && okH -> "ACEITA" to Color.rgb(18, 161, 80)
-                      okKm || okH -> "LIMITE" to Color.rgb(224, 154, 0)
-                      else -> "RECUSA" to Color.rgb(211, 47, 47)
-                  }
-                  mostrar("$titulo\nR$%.2f/km · R$%.0f/h".format(rkm, rh), cor, 22f)
+                  val falhaNota = minNota > 0 && nota != null && nota < minNota
+                  val falhaEmb = maxEmb > 0 && emb != null && emb > maxEmb
+
+                  var nivel = if (okKm && okH) 0 else if (okKm || okH) 1 else 2
+                  if (falhaNota) nivel++
+                  if (falhaEmb) nivel++
+                  if (nivel > 2) nivel = 2
+
+                  val extras = ArrayList<String>()
+                  if (nota != null) extras.add((if (falhaNota) "! " else "") + "Nota %.2f".format(nota))
+                  if (emb != null) extras.add((if (falhaEmb) "! " else "") + "Embarque %.1f km".format(emb))
+                  val linha3 = if (extras.isEmpty()) "" else "\n" + extras.joinToString(" · ")
+
+                  mostrar(titulos[nivel] + "\nR$%.2f/km · R$%.0f/h".format(rkm, rh) + linha3, cores[nivel], 20f)
               }
 
               private fun mostrar(texto: String, cor: Int, tam: Float = 22f) {
@@ -178,8 +285,8 @@ jobs:
         working-directory: CorridaRapida
         run: gradle assembleDebug --no-daemon
       - name: Renomear
-        run: cp CorridaRapida/app/build/outputs/apk/debug/app-debug.apk CorridaRapida/app/build/outputs/apk/debug/CorridaRapida-v3.apk
+        run: cp CorridaRapida/app/build/outputs/apk/debug/app-debug.apk CorridaRapida/app/build/outputs/apk/debug/CorridaRapida-v5.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: CorridaRapida-v3
-          path: CorridaRapida/app/build/outputs/apk/debug/CorridaRapida-v3.apk
+          name: CorridaRapida-v5
+          path: CorridaRapida/app/build/outputs/apk/debug/CorridaRapida-v5.apk
