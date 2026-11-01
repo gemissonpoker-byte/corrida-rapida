@@ -16,12 +16,12 @@ jobs:
           gradle-version: 8.7
       - name: Unzip project
         run: unzip -q CorridaRapida-Android.zip
-      - name: Aplicar versao 5 e Interface Moderna
+      - name: Aplicar versao 5 e Card Maior
         run: |
           D=CorridaRapida/app/src/main
           sed -i 's/versionCode = 1/versionCode = 5/; s/versionName = "1.0"/versionName = "5"/' CorridaRapida/app/build.gradle.kts
           sed -i 's/<application/<application android:icon="@mipmap\/ic_launcher" android:roundIcon="@mipmap\/ic_launcher"/' $D/AndroidManifest.xml
-          mkdir -p $D/res/mipmap-anydpi-v26 $D/res/drawable
+          mkdir -p $D/res/mipmap-anydpi-v26$D/res/drawable
           
           cat > $D/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
@@ -76,7 +76,7 @@ jobs:
               android:notificationTimeout="100" />
           EOF
 
-          # Criação automática do UberService.kt com a nova interface otimizada
+          # Criação automática do UberService.kt com visual ampliado
           cat > $D/java/com/example/corridarapida/UberService.kt <<'EOF'
           package com.example.corridarapida
 
@@ -118,6 +118,7 @@ jobs:
               private var ultimoProcessamento = 0L
               private val handler = Handler(Looper.getMainLooper())
               private var runnableAnalise: Runnable? = null
+              private var runnableEsconder: Runnable? = null
 
               override fun onServiceConnected() {
                   super.onServiceConnected()
@@ -134,12 +135,12 @@ jobs:
 
                   runnableAnalise?.let { handler.removeCallbacks(it) }
                   runnableAnalise = Runnable { processarTela() }
-                  handler.postDelayed(runnableAnalise!!, 150)
+                  handler.postDelayed(runnableAnalise!!, 100)
               }
 
               private fun processarTela() {
                   val agora = System.currentTimeMillis()
-                  if (agora - ultimoProcessamento < 200) return
+                  if (agora - ultimoProcessamento < 150) return
                   ultimoProcessamento = agora
 
                   val sb = StringBuilder()
@@ -168,9 +169,9 @@ jobs:
                   (if (s.contains(",")) s.replace(".", "").replace(",", ".") else s).toDoubleOrNull() ?: 0.0
 
               private fun analisar(txt: String, n: Int) {
-                  if (n == 0) { esconder(); return }
+                  if (n == 0) { tentarEsconderComAtraso(); return }
                   val oferta = txt.contains("R$") && (txt.contains("km") || txt.contains("min"))
-                  if (!oferta) { esconder(); return }
+                  if (!oferta) { tentarEsconderComAtraso(); return }
 
                   val linhas = txt.lines().map { it.trim() }
                   val preco = linhas.firstNotNullOfOrNull { l -> precoRx.matchEntire(l)?.groupValues?.get(1) }?.let(::num)
@@ -198,7 +199,6 @@ jobs:
                   }
 
                   if (preco == null || preco <= 0 || min <= 0 || km <= 0) {
-                      mostrar("OFERTA PENDENTE", "Lendo detalhes da corrida...", "", cinza)
                       return
                   }
 
@@ -231,7 +231,17 @@ jobs:
                   if (emb != null) extras.add((if (falhaEmb) "⚠️ " else "🚗 ") + "Embarque: %.1f km".format(emb))
                   val detalhesStr = extras.joinToString("   ")
 
+                  runnableEsconder?.let { handler.removeCallbacks(it) }
                   mostrar(titulos[nivel], metricasStr, detalhesStr, coresFundo[nivel])
+              }
+
+              private fun tentarEsconderComAtraso() {
+                  if (cardLayout == null) return
+                  runnableEsconder?.let { handler.removeCallbacks(it) }
+                  runnableEsconder = Runnable {
+                      esconder()
+                  }
+                  handler.postDelayed(runnableEsconder!!, 600)
               }
 
               private fun mostrar(veredito: String, metricas: String, detalhes: String, corFundo: Int) {
@@ -241,16 +251,17 @@ jobs:
                       val context = this
                       cardLayout = LinearLayout(context).apply {
                           orientation = LinearLayout.VERTICAL
-                          setPadding(32, 24, 32, 24)
+                          // Espaçamento interno maior para dar corpo ao card
+                          setPadding(48, 36, 48, 36)
                           
                           background = GradientDrawable().apply {
                               shape = GradientDrawable.RECTANGLE
-                              cornerRadius = 24f
+                              cornerRadius = 32f
                           }
                           
                           txtVeredito = TextView(context).apply {
                               setTextColor(Color.WHITE)
-                              textSize = 20f
+                              textSize = 26f // Fonte bem maior para o veredito
                               setTypeface(null, android.graphics.Typeface.BOLD)
                               gravity = Gravity.CENTER
                           }
@@ -258,76 +269,5 @@ jobs:
 
                           txtMetricas = TextView(context).apply {
                               setTextColor(Color.WHITE)
-                              textSize = 16f
-                              setTypeface(null, android.graphics.Typeface.BOLD)
-                              gravity = Gravity.CENTER
-                              setPadding(0, 6, 0, 4)
-                          }
-                          addView(txtMetricas)
-
-                          txtDetalhes = TextView(context).apply {
-                              setTextColor(Color.parseColor("#E0E0E0"))
-                              textSize = 13f
-                              gravity = Gravity.CENTER
-                          }
-                          addView(txtDetalhes)
-                      }
-
-                      val lp = WindowManager.LayoutParams(
-                          WindowManager.LayoutParams.WRAP_CONTENT,
-                          WindowManager.LayoutParams.WRAP_CONTENT,
-                          WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                          WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                              WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-                          PixelFormat.TRANSLUCENT
-                      ).apply { 
-                          gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-                          y = 140 
-                      }
-                      
-                      try {
-                          wm.addView(cardLayout, lp)
-                      } catch (_: Exception) {}
-                  }
-
-                  (cardLayout?.background as? GradientDrawable)?.setColor(corFundo)
-                  txtVeredito?.text = veredito
-                  txtMetricas?.text = metricas
-                  
-                  if (detalhes.isNotEmpty()) {
-                      txtDetalhes?.text = detalhes
-                      txtDetalhes?.visibility = android.view.View.VISIBLE
-                  } else {
-                      txtDetalhes?.visibility = android.view.View.GONE
-                  }
-                  
-                  cardLayout?.visibility = android.view.View.VISIBLE
-              }
-
-              private fun esconder() {
-                  handler.removeCallbacksAndMessages(null)
-                  cardLayout?.let {
-                      try { 
-                          (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(it) 
-                      } catch (_: Exception) {}
-                      cardLayout = null
-                      txtVeredito = null
-                      txtMetricas = null
-                      txtDetalhes = null
-                  }
-              }
-
-              override fun onInterrupt() { esconder() }
-              override fun onDestroy() { esconder(); super.onDestroy() }
-          }
-          EOF
-          
-      - name: Build
-        working-directory: CorridaRapida
-        run: gradle assembleDebug --no-daemon
-      - name: Renomear
-        run: cp CorridaRapida/app/build/outputs/apk/debug/app-debug.apk CorridaRapida/app/build/outputs/apk/debug/CorridaRapida-v5.apk
-      - uses: actions/upload-artifact@v4
-        with:
-          name: CorridaRapida-v5
-          path: CorridaRapida/app/build/outputs/apk/debug/CorridaRapida-v5.apk
+                              textSize = 20f // Fonte ampliada para R$/km e R$/h
+                              setTypeface(null, android.graphics
