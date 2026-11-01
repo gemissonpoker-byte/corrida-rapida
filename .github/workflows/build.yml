@@ -1,4 +1,4 @@
-name: Build APK v6
+name: Build APK v7
 on:
   push:
   workflow_dispatch:
@@ -16,13 +16,12 @@ jobs:
           gradle-version: 8.7
       - name: Unzip project
         run: unzip -q CorridaRapida-Android.zip
-      - name: Aplicar versao 6 e build
+      - name: Aplicar versao 6 com Token e Metas Manuais
         run: |
           D=CorridaRapida/app/src/main
           sed -i 's/versionCode = 1/versionCode = 6/; s/versionName = "1.0"/versionName = "6"/' CorridaRapida/app/build.gradle.kts
           sed -i 's/<application/<application android:icon="@mipmap\/ic_launcher" android:roundIcon="@mipmap\/ic_launcher"/' $D/AndroidManifest.xml
           
-          # Garante que todas as pastas necessárias existem antes de criar os ficheiros
           mkdir -p $D/res/mipmap-anydpi-v26 $D/res/drawable $D/res/values $D/res/xml $D/java/com/example/corridarapida
           
           cat > $D/res/mipmap-anydpi-v26/ic_launcher.xml << 'EOF'
@@ -76,7 +75,121 @@ jobs:
               android:notificationTimeout="100" />
           EOF
 
-          # Criação do UberService v6 otimizado e estável
+          # Criação da MainActivity com Tela de Token e Metas Manuais
+          cat > $D/java/com/example/corridarapida/MainActivity.kt << 'EOF'
+          package com.example.corridarapida
+
+          import android.app.Activity
+          import android.content.Intent
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.text.InputType
+          import android.widget.*
+
+          class MainActivity : Activity() {
+              override fun onCreate(b: Bundle?) {
+                  super.onCreate(b)
+                  val sp = getSharedPreferences("cfg", MODE_PRIVATE)
+                  val tokenSalvo = sp.getBoolean("ativado", false)
+
+                  val col = LinearLayout(this).apply { 
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(48, 48, 48, 48) 
+                  }
+
+                  if (!tokenSalvo) {
+                      col.addView(TextView(this).apply {
+                          text = "Ativação do Corrida Rápida v6"
+                          textSize = 22f
+                          setPadding(0, 0, 0, 24)
+                      })
+                      col.addView(TextView(this).apply { text = "Insira o token de acesso:" })
+                      
+                      val inputToken = EditText(this).apply {
+                          hint = "Ex: TOKEN-2026"
+                          col.addView(this)
+                      }
+
+                      col.addView(Button(this).apply {
+                          text = "Ativar Aplicativo"
+                          setPadding(0, 24, 0, 24)
+                          setOnClickListener {
+                              val token = inputToken.text.toString().trim()
+                              if (token.isNotEmpty()) {
+                                  sp.edit().putBoolean("ativado", true).putString("token", token).apply()
+                                  Toast.makeText(this@MainActivity, "Ativado com sucesso!", Toast.LENGTH_SHORT).show()
+                                  recreate()
+                              } else {
+                                  Toast.makeText(this@MainActivity, "Digite um token válido", Toast.LENGTH_SHORT).show()
+                              }
+                          }
+                      })
+                  } else {
+                      col.addView(TextView(this).apply {
+                          text = "Painel de Metas & Limites"
+                          textSize = 20f
+                          setPadding(0, 0, 0, 16)
+                      })
+
+                      fun campo(rotulo: String, chave: String, padrao: Float): EditText {
+                          col.addView(TextView(this).apply { 
+                              text = rotulo
+                              setPadding(0, 12, 0, 4)
+                          })
+                          return EditText(this).apply {
+                              inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                              setText(sp.getFloat(chave, padrao).toString())
+                              col.addView(this)
+                          }
+                      }
+                      fun ler(e: EditText, d: Float): Float = e.text.toString().replace(",", ".").toFloatOrNull() ?: d
+
+                      val km = campo("Mínimo R$/km", "minKm", 1.8f)
+                      val h = campo("Mínimo R$/hora", "minH", 35f)
+                      val nota = campo("Nota mínima do passageiro (Estrelas)", "minNota", 4.7f)
+                      val emb = campo("Embarque máximo (km)", "maxEmb", 2.0f)
+
+                      col.addView(Button(this).apply {
+                          text = "Salvar Metas"
+                          setPadding(0, 20, 0, 20)
+                          setOnClickListener {
+                              sp.edit()
+                                  .putFloat("minKm", ler(km, 1.8f))
+                                  .putFloat("minH", ler(h, 35f))
+                                  .putFloat("minNota", ler(nota, 4.7f))
+                                  .putFloat("maxEmb", ler(emb, 2.0f))
+                                  .apply()
+                              Toast.makeText(this@MainActivity, "Metas Salvas com Sucesso!", Toast.LENGTH_SHORT).show()
+                          }
+                      })
+
+                      col.addView(TextView(this).apply {
+                          text = "\n1. Ative o serviço \"Corrida Rápida v6\" em Acessibilidade.\n2. Abra o app do Uber Driver."
+                          setPadding(0, 24, 0, 16)
+                      })
+
+                      col.addView(Button(this).apply {
+                          text = "Abrir Acessibilidade"
+                          setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+                      })
+
+                      col.addView(Button(this).apply {
+                          text = "Desativar / Trocar Token"
+                          setOnClickListener {
+                              sp.edit().putBoolean("ativado", false).remove("token").apply()
+                              recreate()
+                          }
+                      })
+                  }
+
+                  val sv = ScrollView(this)
+                  sv.addView(col)
+                  setContentView(sv)
+              }
+          }
+          EOF
+
+          # Criação do UberService v6 com verificação de ativação e metas manuais
           cat > $D/java/com/example/corridarapida/UberService.kt << 'EOF'
           package com.example.corridarapida
 
@@ -122,6 +235,9 @@ jobs:
 
               override fun onServiceConnected() {
                   super.onServiceConnected()
+                  val sp = getSharedPreferences("cfg", MODE_PRIVATE)
+                  if (!sp.getBoolean("ativado", false)) return
+
                   mostrar("v6 · SERVIÇO ATIVO", "Aguardando nova corrida...", "", cinza)
                   handler.postDelayed({
                       if (txtVeredito?.text?.toString()?.contains("SERVIÇO ATIVO") == true) esconder()
@@ -129,6 +245,9 @@ jobs:
               }
 
               override fun onAccessibilityEvent(e: AccessibilityEvent) {
+                  val sp = getSharedPreferences("cfg", MODE_PRIVATE)
+                  if (!sp.getBoolean("ativado", false)) return
+
                   val pkg = e.packageName?.toString() ?: return
                   if (pkg == packageName) return
                   if (pkg != uber) { esconder(); return }
