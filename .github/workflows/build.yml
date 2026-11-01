@@ -15,21 +15,21 @@ jobs:
         with:
           gradle-version: 8.7
       - name: Unzip project
-        run: unzip -q CorridaRapida-Android.zip
+        run: |
+          unzip -q CorridaRapida-Android.zip
+          # Encontra automaticamente o nome real da pasta extraída
+          PROJECT_DIR=$(find . -maxdepth 1 -type d -not -name '.' -not -name '.*' | head -n 1)
+          echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
       - name: Aplicar versao 7 com Token e Metas Manuais
         run: |
-          D=CorridaRapida/app/src/main
-          sed -i 's/versionCode = 1/versionCode = 7/; s/versionName = "1.0"/versionName = "7"/' CorridaRapida/app/build.gradle.kts
-          sed -i 's/<application/<application android:icon="@mipmap\/ic_launcher" android:roundIcon="@mipmap\/ic_launcher"/' $D/AndroidManifest.xml
+          PROJ="${{ env.PROJECT_DIR }}"
+          D="$PROJ/app/src/main"
+          sed -i 's/versionCode = 1/versionCode = 7/; s/versionName = "1.0"/versionName = "7"/' "$PROJ/app/build.gradle.kts"
+          sed -i 's/<application/<application android:icon="@mipmap\/ic_launcher" android:roundIcon="@mipmap\/ic_launcher"/' "$D/AndroidManifest.xml"
           
-          # Garante a criação de todas as pastas necessárias antecipadamente
-          mkdir -p $D/res/mipmap-anydpi-v26
-          mkdir -p $D/res/drawable
-          mkdir -p $D/res/values
-          mkdir -p $D/res/xml
-          mkdir -p $D/java/com/example/corridarapida
+          mkdir -p "$D/res/mipmap-anydpi-v26" "$D/res/drawable" "$D/res/values" "$D/res/xml" "$D/java/com/example/corridarapida"
           
-          cat > $D/res/mipmap-anydpi-v26/ic_launcher.xml << 'EOF'
+          cat > "$D/res/mipmap-anydpi-v26/ic_launcher.xml" << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
               <background android:drawable="@color/ic_bg"/>
@@ -37,7 +37,7 @@ jobs:
           </adaptive-icon>
           EOF
 
-          cat > $D/res/drawable/ic_fg.xml << 'EOF'
+          cat > "$D/res/drawable/ic_fg.xml" << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
               android:width="108dp"
@@ -56,19 +56,19 @@ jobs:
           </vector>
           EOF
 
-          cat > $D/res/values/ic_colors.xml << 'EOF'
+          cat > "$D/res/values/ic_colors.xml" << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <resources><color name="ic_bg">#1B1B1B</color></resources>
           EOF
 
-          cat > $D/res/values/strings.xml << 'EOF'
+          cat > "$D/res/values/strings.xml" << 'EOF'
           <resources>
               <string name="app_name">Corrida Rápida v7</string>
               <string name="svc_desc">Lê a oferta de corrida na tela do app de motorista e mostra um veredito flutuante (aceita, limite ou recusa).</string>
           </resources>
           EOF
 
-          cat > $D/res/xml/accessibility_config.xml << 'EOF'
+          cat > "$D/res/xml/accessibility_config.xml" << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
               android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged|typeWindowsChanged"
@@ -81,7 +81,7 @@ jobs:
           EOF
 
           # Criação da MainActivity com Tela de Token e Metas Manuais
-          cat > $D/java/com/example/corridarapida/MainActivity.kt << 'EOF'
+          cat > "$D/java/com/example/corridarapida/MainActivity.kt" << 'EOF'
           package com.example.corridarapida
 
           import android.app.Activity
@@ -195,7 +195,7 @@ jobs:
           EOF
 
           # Criação do UberService v7
-          cat > $D/java/com/example/corridarapida/UberService.kt << 'EOF'
+          cat > "$D/java/com/example/corridarapida/UberService.kt" << 'EOF'
           package com.example.corridarapida
 
           import android.accessibilityservice.AccessibilityService
@@ -293,4 +293,177 @@ jobs:
                   (if (s.contains(",")) s.replace(".", "").replace(",", ".") else s).toDoubleOrNull() ?: 0.0
 
               private fun analisar(txt: String, n: Int) {
-                  if
+                  if (n == 0) { tentarEsconderComAtraso(); return }
+                  val oferta = txt.contains("R$") && (txt.contains("km") || txt.contains("min"))
+                  if (!oferta) { tentarEsconderComAtraso(); return }
+
+                  val linhas = txt.lines().map { it.trim() }
+                  val preco = linhas.firstNotNullOfOrNull { l -> precoRx.matchEntire(l)?.groupValues?.get(1) }?.let(::num)
+                      ?: linhas.firstOrNull { it.contains("R$") && !it.contains("/km") && !it.startsWith("+") }
+                          ?.let { precoRx.find(it)?.groupValues?.get(1) }?.let(::num)
+
+                  val trechos = trechoRx.findAll(txt).toList()
+                  val tot = totalRx.find(txt)
+                  var min = 0.0
+                  var km = 0.0
+
+                  if (tot != null) {
+                      min = tot.groupValues[1].toDouble()
+                      km = num(tot.groupValues[2])
+                  } else if (trechos.size >= 2) {
+                      min = trechos.take(2).sumOf { it.groupValues[1].toDouble() }
+                      km = trechos.take(2).sumOf { num(it.groupValues[2]) }
+                  } else {
+                      val kmMatch = Regex("([\\d.,]+)\\s*km").find(txt)
+                      val minMatch = Regex("(\\d+)\\s*min").find(txt)
+                      if (kmMatch != null && minMatch != null) {
+                          km = num(kmMatch.groupValues[1])
+                          min = minMatch.groupValues[1].toDouble()
+                      }
+                  }
+
+                  if (preco == null || preco <= 0 || min <= 0 || km <= 0) {
+                      return
+                  }
+
+                  val emb: Double? = if (trechos.size >= 2) num(trechos[0].groupValues[2]).takeIf { it > 0 && it < km } else null
+                  val nota: Double? = notaRx.find(txt)?.groupValues?.get(1)?.replace(',', '.')?.toDoubleOrNull()
+                      ?: linhas.firstNotNullOfOrNull { notaLinhaRx.matchEntire(it)?.groupValues?.get(1) }?.replace(',', '.')?.toDoubleOrNull()
+
+                  val sp = getSharedPreferences("cfg", MODE_PRIVATE)
+                  val metaKm = sp.getFloat("minKm", 1.8f)
+                  val metaH = sp.getFloat("minH", 35f)
+                  val minNota = sp.getFloat("minNota", 4.7f)
+                  val maxEmb = sp.getFloat("maxEmb", 2.0f)
+
+                  val rkm = preco / km
+                  val rh = preco / (min / 60.0)
+                  val okKm = rkm >= metaKm
+                  val okH = rh >= metaH
+                  val falhaNota = minNota > 0 && nota != null && nota < minNota
+                  val falhaEmb = maxEmb > 0 && emb != null && emb > maxEmb
+
+                  var nivel = if (okKm && okH) 0 else if (okKm || okH) 1 else 2
+                  if (falhaNota) nivel++
+                  if (falhaEmb) nivel++
+                  if (nivel > 2) nivel = 2
+
+                  val metricasStr = "R$ %.2f/km  •  R$ %.0f/h".format(rkm, rh)
+                  
+                  val extras = ArrayList<String>()
+                  if (nota != null) extras.add((if (falhaNota) "⚠️ " else "⭐ ") + "%.2f".format(nota))
+                  if (emb != null) extras.add((if (falhaEmb) "⚠️ " else "🚗 ") + "Embarque: %.1f km".format(emb))
+                  val detalhesStr = extras.joinToString("   ")
+
+                  runnableEsconder?.let { handler.removeCallbacks(it) }
+                  mostrar(titulos[nivel], metricasStr, detalhesStr, coresFundo[nivel])
+              }
+
+              private fun tentarEsconderComAtraso() {
+                  if (cardLayout == null) return
+                  runnableEsconder?.let { handler.removeCallbacks(it) }
+                  runnableEsconder = Runnable {
+                      esconder()
+                  }
+                  handler.postDelayed(runnableEsconder!!, 600)
+              }
+
+              private fun mostrar(veredito: String, metricas: String, detalhes: String, corFundo: Int) {
+                  val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+                  
+                  if (cardLayout == null) {
+                      val context = this
+                      cardLayout = LinearLayout(context).apply {
+                          orientation = LinearLayout.VERTICAL
+                          setPadding(48, 36, 48, 36)
+                          
+                          background = GradientDrawable().apply {
+                              shape = GradientDrawable.RECTANGLE
+                              cornerRadius = 32f
+                          }
+                          
+                          txtVeredito = TextView(context).apply {
+                              setTextColor(Color.WHITE)
+                              textSize = 26f
+                              setTypeface(null, android.graphics.Typeface.BOLD)
+                              gravity = Gravity.CENTER
+                          }
+                          addView(txtVeredito)
+
+                          txtMetricas = TextView(context).apply {
+                              setTextColor(Color.WHITE)
+                              textSize = 20f
+                              setTypeface(null, android.graphics.Typeface.BOLD)
+                              gravity = Gravity.CENTER
+                              setPadding(0, 10, 0, 6)
+                          }
+                          addView(txtMetricas)
+
+                          txtDetalhes = TextView(context).apply {
+                              setTextColor(Color.parseColor("#F0F0F0"))
+                              textSize = 15f
+                              gravity = Gravity.CENTER
+                          }
+                          addView(txtDetalhes)
+                      }
+
+                      val lp = WindowManager.LayoutParams(
+                          WindowManager.LayoutParams.WRAP_CONTENT,
+                          WindowManager.LayoutParams.WRAP_CONTENT,
+                          WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                          WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                              WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                          PixelFormat.TRANSLUCENT
+                      ).apply { 
+                          gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                          y = 120 
+                      }
+                      
+                      try {
+                          wm.addView(cardLayout, lp)
+                      } catch (_: Exception) {}
+                  }
+
+                  (cardLayout?.background as? GradientDrawable)?.setColor(corFundo)
+                  txtVeredito?.text = veredito
+                  txtMetricas?.text = metricas
+                  
+                  if (detalhes.isNotEmpty()) {
+                      txtDetalhes?.text = detalhes
+                      txtDetalhes?.visibility = android.view.View.VISIBLE
+                  } else {
+                      txtDetalhes?.visibility = android.view.View.GONE
+                  }
+                  
+                  cardLayout?.visibility = android.view.View.VISIBLE
+              }
+
+              private fun esconder() {
+                  handler.removeCallbacksAndMessages(null)
+                  cardLayout?.let {
+                      try { 
+                          (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(it) 
+                      } catch (_: Exception) {}
+                      cardLayout = null
+                      txtVeredito = null
+                      txtMetricas = null
+                      txtDetalhes = null
+                  }
+              }
+
+              override fun onInterrupt() { esconder() }
+              override fun onDestroy() { esconder(); super.onDestroy() }
+          }
+          EOF
+          
+      - name: Build
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: gradle assembleDebug --no-daemon
+      - name: Copiar APK para pasta de saida
+        run: |
+          mkdir -p output_apk
+          cp ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk output_apk/CorridaRapida-v7.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CorridaRapida-v7
+          path: output_apk/CorridaRapida-v7.apk
