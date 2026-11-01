@@ -31,6 +31,25 @@ jobs:
           </adaptive-icon>
           EOF
 
+          cat > $D/res/drawable/ic_fg.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path android:fillColor="#FFFFFF" android:pathData="M34,52h40a4,4 0 0 1 4,4v10a4,4 0 0 1 -4,4h-40a4,4 0 0 1 -4,-4v-10a4,4 0 0 1 4,-4z"/>
+              <path android:fillColor="#FFFFFF" android:pathData="M39,52L44,40H64L69,52Z"/>
+              <path android:fillColor="#1B1B1B" android:pathData="M43,50L46,42H62L65,50Z"/>
+              <path android:fillColor="#1B1B1B" android:pathData="M42,63.5m-6.5,0a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0"/>
+              <path android:fillColor="#1B1B1B" android:pathData="M66,63.5m-6.5,0a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0"/>
+              <path android:fillColor="#FFFFFF" android:pathData="M42,63.5m-3.5,0a3.5,3.5 0 1,0 7,0a3.5,3.5 0 1,0 -7,0"/>
+              <path android:fillColor="#FFFFFF" android:pathData="M66,63.5m-3.5,0a3.5,3.5 0 1,0 7,0a3.5,3.5 0 1,0 -7,0"/>
+              <path android:fillColor="#12A150" android:pathData="M74,38m-12,0a12,12 0 1,0 24,0a12,12 0 1,0 -24,0"/>
+              <path android:strokeColor="#FFFFFF" android:strokeWidth="3.2" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M68,38.5L72.5,43L80,34"/>
+          </vector>
+          EOF
+
           cat > $D/res/values/ic_colors.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <resources><color name="ic_bg">#1B1B1B</color></resources>
