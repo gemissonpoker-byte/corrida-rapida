@@ -1,4 +1,4 @@
-name: Build APK
+name: Build APK v3
 on:
   push:
   workflow_dispatch:
@@ -16,14 +16,35 @@ jobs:
           gradle-version: 8.7
       - name: Unzip project
         run: unzip -q CorridaRapida-Android.zip
-      - name: Atualizar leitor
+      - name: Aplicar versao 3
         run: |
-          cat > CorridaRapida/app/src/main/java/com/example/corridarapida/UberService.kt <<'EOF'
+          D=CorridaRapida/app/src/main
+          sed -i 's/versionCode = 1/versionCode = 3/; s/versionName = "1.0"/versionName = "3"/' CorridaRapida/app/build.gradle.kts
+          cat > $D/res/values/strings.xml <<'EOF'
+          <resources>
+              <string name="app_name">Corrida Rápida v3</string>
+              <string name="svc_desc">Lê a oferta de corrida na tela do app de motorista e mostra um veredito flutuante (aceita, limite ou recusa).</string>
+          </resources>
+          EOF
+          cat > $D/res/xml/accessibility_config.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged|typeWindowsChanged"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:accessibilityFlags="flagReportViewIds|flagIncludeNotImportantViews|flagRetrieveInteractiveWindows"
+              android:canRetrieveWindowContent="true"
+              android:isAccessibilityTool="true"
+              android:description="@string/svc_desc"
+              android:notificationTimeout="100" />
+          EOF
+          cat > $D/java/com/example/corridarapida/UberService.kt <<'EOF'
           package com.example.corridarapida
 
           import android.accessibilityservice.AccessibilityService
           import android.graphics.Color
           import android.graphics.PixelFormat
+          import android.os.Handler
+          import android.os.Looper
           import android.view.Gravity
           import android.view.WindowManager
           import android.view.accessibility.AccessibilityEvent
@@ -32,41 +53,60 @@ jobs:
 
           class UberService : AccessibilityService() {
 
+              private val uber = "com.ubercab.driver"
               private val totalRx = Regex("(\\d+)\\s*min\\w*\\s*[•·]\\s*([\\d.,]+)\\s*km")
               private val trechoRx = Regex("(\\d+)\\s*min\\w*\\s*\\(([\\d.,]+)\\s*km\\)")
               private val precoRx = Regex("R\\$\\s*(\\d+(?:[.,]\\d+)?)")
+              private val cinza = Color.rgb(90, 90, 90)
               private var faixa: TextView? = null
+              private var ultimo = 0L
+              private val h = Handler(Looper.getMainLooper())
+
+              override fun onServiceConnected() {
+                  super.onServiceConnected()
+                  mostrar("v3 · serviço ativo", cinza, 14f)
+                  h.postDelayed({
+                      if (faixa?.text?.toString()?.contains("serviço ativo") == true) esconder()
+                  }, 3000)
+              }
 
               override fun onAccessibilityEvent(e: AccessibilityEvent) {
                   val pkg = e.packageName?.toString() ?: return
-                  if (pkg != "com.ubercab.driver") {
-                      if (pkg != packageName) esconder()
-                      return
-                  }
-                  val root = rootInActiveWindow ?: return
+                  if (pkg == packageName) return
+                  if (pkg != uber) { esconder(); return }
+                  val agora = System.currentTimeMillis()
+                  if (agora - ultimo < 250) return
+                  ultimo = agora
                   val sb = StringBuilder()
-                  coletar(root, sb)
-                  analisar(sb.toString())
+                  var n = 0
+                  val raizes = ArrayList<AccessibilityNodeInfo>()
+                  try { windows?.forEach { w -> w.root?.let { raizes.add(it) } } } catch (_: Exception) {}
+                  rootInActiveWindow?.let { raizes.add(it) }
+                  for (r in raizes) {
+                      if (r.packageName?.toString() == uber) n += coletar(r, sb)
+                  }
+                  analisar(sb.toString().replace('\u00A0', ' ').replace('\u202F', ' '), n)
               }
 
-              private fun coletar(n: AccessibilityNodeInfo?, sb: StringBuilder) {
-                  if (n == null) return
-                  n.text?.let { sb.append(it).append('\n') }
-                  n.contentDescription?.let { sb.append(it).append('\n') }
-                  for (i in 0 until n.childCount) coletar(n.getChild(i), sb)
+              private fun coletar(n: AccessibilityNodeInfo?, sb: StringBuilder): Int {
+                  if (n == null) return 0
+                  var c = 0
+                  n.text?.let { sb.append(it).append('\n'); c++ }
+                  n.contentDescription?.let { sb.append(it).append('\n'); c++ }
+                  for (i in 0 until n.childCount) c += coletar(n.getChild(i), sb)
+                  return c
               }
 
               private fun num(s: String): Double =
                   (if (s.contains(",")) s.replace(".", "").replace(",", ".") else s).toDoubleOrNull() ?: 0.0
 
-              private fun analisar(txt: String) {
-                  if (!txt.contains("Aceitar")) { esconder(); return }
-                  val cinza = Color.rgb(90, 90, 90)
+              private fun analisar(txt: String, n: Int) {
+                  if (n == 0) { mostrar("v3 · Uber sem texto legível", cinza, 14f); return }
+                  if (!txt.contains("R$")) { mostrar("v3 · Uber aberto ($n textos)", cinza, 14f); return }
                   val linhas = txt.lines().map { it.trim() }
                   val preco = linhas.firstNotNullOfOrNull { l -> precoRx.matchEntire(l)?.groupValues?.get(1) }?.let(::num)
                       ?: linhas.firstOrNull { it.contains("R$") && !it.contains("/km") && !it.startsWith("+") }
                           ?.let { precoRx.find(it)?.groupValues?.get(1) }?.let(::num)
-
                   var min = 0.0
                   var km = 0.0
                   val tot = totalRx.find(txt)
@@ -81,10 +121,10 @@ jobs:
                       }
                   }
                   if (preco == null || preco <= 0 || min <= 0 || km <= 0) {
-                      mostrar("Oferta não lida", cinza)
+                      val amostra = linhas.filter { it.contains("R$") || it.contains("km") }.take(3).joinToString(" | ").take(120)
+                      mostrar("v3 · Oferta não lida\n$amostra", cinza, 13f)
                       return
                   }
-
                   val sp = getSharedPreferences("cfg", MODE_PRIVATE)
                   val metaKm = sp.getFloat("minKm", 1.8f)
                   val metaH = sp.getFloat("minH", 35f)
@@ -97,16 +137,16 @@ jobs:
                       okKm || okH -> "LIMITE" to Color.rgb(224, 154, 0)
                       else -> "RECUSA" to Color.rgb(211, 47, 47)
                   }
-                  mostrar("$titulo\nR$%.2f/km · R$%.0f/h".format(rkm, rh), cor)
+                  mostrar("$titulo\nR$%.2f/km · R$%.0f/h".format(rkm, rh), cor, 22f)
               }
 
-              private fun mostrar(texto: String, cor: Int) {
+              private fun mostrar(texto: String, cor: Int, tam: Float = 22f) {
                   val wm = getSystemService(WINDOW_SERVICE) as WindowManager
                   val v = faixa ?: TextView(this).apply {
-                      textSize = 22f
                       setTextColor(Color.WHITE)
                       gravity = Gravity.CENTER
                       setPadding(40, 24, 40, 24)
+                      maxWidth = resources.displayMetrics.widthPixels - 40
                       val lp = WindowManager.LayoutParams(
                           WindowManager.LayoutParams.WRAP_CONTENT,
                           WindowManager.LayoutParams.WRAP_CONTENT,
@@ -118,6 +158,7 @@ jobs:
                       wm.addView(this, lp)
                       faixa = this
                   }
+                  v.textSize = tam
                   v.text = texto
                   v.setBackgroundColor(cor)
               }
@@ -136,7 +177,9 @@ jobs:
       - name: Build
         working-directory: CorridaRapida
         run: gradle assembleDebug --no-daemon
+      - name: Renomear
+        run: cp CorridaRapida/app/build/outputs/apk/debug/app-debug.apk CorridaRapida/app/build/outputs/apk/debug/CorridaRapida-v3.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: CorridaRapida-APK
-          path: CorridaRapida/app/build/outputs/apk/debug/app-debug.apk
+          name: CorridaRapida-v3
+          path: CorridaRapida/app/build/outputs/apk/debug/CorridaRapida-v3.apk
