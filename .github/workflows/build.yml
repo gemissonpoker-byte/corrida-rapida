@@ -16,6 +16,8 @@ jobs:
           gradle-version: 8.7
       - name: Unzip project
         run: unzip -q CorridaRapida-Android.zip
+      - name: Fix compile error
+        run: sed -i 's/\boverlay\b/faixa/g' CorridaRapida/app/src/main/java/com/example/corridarapida/UberService.kt
       - name: Build
         working-directory: CorridaRapida
         run: gradle assembleDebug --no-daemon
