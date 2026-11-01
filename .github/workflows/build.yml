@@ -1,1 +1,265 @@
+name: Build APK v8
 
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      - name: Unzip project
+        run: unzip -q CorridaRapida-Android.zip
+      - name: Aplicar versao 8 com Token Temporal de 30 Dias
+        run: |
+          PROJ=$(find . -maxdepth 1 -type d -not -name '.' -not -name '.*' -not -name 'output_apk' | head -n 1)
+          echo "PROJECT_DIR=$PROJ" >> $GITHUB_ENV
+          
+          D="$PROJ/app/src/main"
+          sed -i 's/versionCode = 1/versionCode = 8/; s/versionName = "1.0"/versionName = "8"/' "$PROJ/app/build.gradle.kts"
+          sed -i 's/<application/<application android:icon="@mipmap\/ic_launcher" android:roundIcon="@mipmap\/ic_launcher"/' "$D/AndroidManifest.xml"
+          
+          mkdir -p "$D/res/mipmap-anydpi-v26" "$D/res/drawable" "$D/res/values" "$D/res/xml" "$D/java/com/example/corridarapida"
+          
+          cat > "$D/res/mipmap-anydpi-v26/ic_launcher.xml" << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/ic_bg"/>
+              <foreground android:drawable="@drawable/ic_fg"/>
+          </adaptive-icon>
+          EOF
+
+          cat > "$D/res/drawable/ic_fg.xml" << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp"
+              android:height="108dp"
+              android:viewportWidth="108"
+              android:viewportHeight="108">
+              <path android:fillColor="#FFFFFF" android:pathData="M34,52h40a4,4 0 0 1 4,4v10a4,4 0 0 1 -4,4h-40a4,4 0 0 1 -4,-4v-10a4,4 0 0 1 4,-4z"/>
+              <path android:fillColor="#FFFFFF" android:pathData="M39,52L44,40H64L69,52Z"/>
+              <path android:fillColor="#1B1B1B" android:pathData="M43,50L46,42H62L65,50Z"/>
+              <path android:fillColor="#1B1B1B" android:pathData="M42,63.5m-6.5,0a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0"/>
+              <path android:fillColor="#1B1B1B" android:pathData="M66,63.5m-6.5,0a6.5,6.5 0 1,0 13,0a6.5,6.5 0 1,0 -13,0"/>
+              <path android:fillColor="#FFFFFF" android:pathData="M42,63.5m-3.5,0a3.5,3.5 0 1,0 7,0a3.5,3.5 0 1,0 -7,0"/>
+              <path android:fillColor="#FFFFFF" android:pathData="M66,63.5m-3.5,0a3.5,3.5 0 1,0 7,0a3.5,3.5 0 1,0 -7,0"/>
+              <path android:fillColor="#12A150" android:pathData="M74,38m-12,0a12,12 0 1,0 24,0a12,12 0 1,0 -24,0"/>
+              <path android:strokeColor="#FFFFFF" android:strokeWidth="3.2" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M68,38.5L72.5,43L80,34"/>
+          </vector>
+          EOF
+
+          cat > "$D/res/values/ic_colors.xml" << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources><color name="ic_bg">#1B1B1B</color></resources>
+          EOF
+
+          cat > "$D/res/values/strings.xml" << 'EOF'
+          <resources>
+              <string name="app_name">Corrida Rápida v8</string>
+              <string name="svc_desc">Lê a oferta de corrida na tela do app de motorista e mostra um veredito flutuante (aceita, limite ou recusa).</string>
+          </resources>
+          EOF
+
+          cat > "$D/res/xml/accessibility_config.xml" << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged|typeWindowsChanged"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:accessibilityFlags="flagReportViewIds|flagIncludeNotImportantViews|flagRetrieveInteractiveWindows"
+              android:canRetrieveWindowContent="true"
+              android:isAccessibilityTool="true"
+              android:description="@string/svc_desc"
+              android:notificationTimeout="100" />
+          EOF
+
+          # MainActivity v8
+          cat > "$D/java/com/example/corridarapida/MainActivity.kt" << 'EOF'
+          package com.example.corridarapida
+
+          import android.app.Activity
+          import android.content.Intent
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.text.InputType
+          import android.widget.*
+          import java.text.SimpleDateFormat
+          import java.util.*
+
+          class MainActivity : Activity() {
+              override fun onCreate(b: Bundle?) {
+                  super.onCreate(b)
+                  val sp = getSharedPreferences("cfg", MODE_PRIVATE)
+                  
+                  val expMillis = sp.getLong("exp_millis", 0L)
+                  val agora = System.currentTimeMillis()
+                  val ativado = expMillis > agora
+
+                  if (!ativado && expMillis > 0) {
+                      sp.edit().putBoolean("ativado", false).remove("exp_millis").apply()
+                  }
+
+                  val col = LinearLayout(this).apply { 
+                      orientation = LinearLayout.VERTICAL
+                      setPadding(48, 48, 48, 48) 
+                  }
+
+                  if (!ativado) {
+                      col.addView(TextView(this).apply {
+                          text = "Ativação do Corrida Rápida v8"
+                          textSize = 22f
+                          setPadding(0, 0, 0, 24)
+                      })
+                      col.addView(TextView(this).apply { text = "Insira o token de acesso (30 dias):" })
+                      
+                      val inputToken = EditText(this).apply {
+                          hint = "Ex: CR8-VALIDADE-..."
+                          col.addView(this)
+                      }
+
+                      col.addView(Button(this).apply {
+                          text = "Ativar Aplicativo"
+                          setPadding(0, 24, 0, 24)
+                          setOnClickListener {
+                              val token = inputToken.text.toString().trim()
+                              if (token.startsWith("CR8-") || token.isNotEmpty()) {
+                                  val cal = Calendar.getInstance()
+                                  cal.add(Calendar.DAY_OF_YEAR, 30)
+                                  val novaExp = cal.timeInMillis
+
+                                  sp.edit()
+                                      .putBoolean("ativado", true)
+                                      .putLong("exp_millis", novaExp)
+                                      .putString("token", token)
+                                      .apply()
+
+                                  Toast.makeText(this@MainActivity, "Ativado com sucesso por 30 dias!", Toast.LENGTH_LONG).show()
+                                  recreate()
+                              } else {
+                                  Toast.makeText(this@MainActivity, "Token inválido!", Toast.LENGTH_SHORT).show()
+                              }
+                          }
+                      })
+                  } else {
+                      val sdf = SimpleDateFormat("dd/MM/yyyy", Locale.getDefault())
+                      val dataExpStr = sdf.format(Date(expMillis))
+
+                      col.addView(TextView(this).apply {
+                          text = "Painel de Metas & Limites\n(Ativo até: $dataExpStr)"
+                          textSize = 18f
+                          setPadding(0, 0, 0, 16)
+                      })
+
+                      fun campo(rotulo: String, chave: String, padrao: Float): EditText {
+                          col.addView(TextView(this).apply { 
+                              text = rotulo
+                              setPadding(0, 12, 0, 4)
+                          })
+                          return EditText(this).apply {
+                              inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                              setText(sp.getFloat(chave, padrao).toString())
+                              col.addView(this)
+                          }
+                      }
+                      fun ler(e: EditText, d: Float): Float = e.text.toString().replace(",", ".").toFloatOrNull() ?: d
+
+                      val km = campo("Mínimo R$/km", "minKm", 1.8f)
+                      val h = campo("Mínimo R$/hora", "minH", 35f)
+                      val nota = campo("Nota mínima do passageiro (Estrelas)", "minNota", 4.7f)
+                      val emb = campo("Embarque máximo (km)", "maxEmb", 2.0f)
+
+                      col.addView(Button(this).apply {
+                          text = "Salvar Metas"
+                          setPadding(0, 20, 0, 20)
+                          setOnClickListener {
+                              sp.edit()
+                                  .putFloat("minKm", ler(km, 1.8f))
+                                  .putFloat("minH", ler(h, 35f))
+                                  .putFloat("minNota", ler(nota, 4.7f))
+                                  .putFloat("maxEmb", ler(emb, 2.0f))
+                                  .apply()
+                              Toast.makeText(this@MainActivity, "Metas Salvas com Sucesso!", Toast.LENGTH_SHORT).show()
+                          }
+                      })
+
+                      col.addView(TextView(this).apply {
+                          text = "\n1. Ative o serviço \"Corrida Rápida v8\" em Acessibilidade.\n2. Abra o app do Uber Driver."
+                          setPadding(0, 24, 0, 16)
+                      })
+
+                      col.addView(Button(this).apply {
+                          text = "Abrir Acessibilidade"
+                          setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+                      })
+
+                      col.addView(Button(this).apply {
+                          text = "Desativar / Trocar Token"
+                          setOnClickListener {
+                              sp.edit().putBoolean("ativado", false).remove("exp_millis").remove("token").apply()
+                              recreate()
+                          }
+                      })
+                  }
+
+                  val sv = ScrollView(this)
+                  sv.addView(col)
+                  setContentView(sv)
+              }
+          }
+          EOF
+
+          # UberService v8
+          cat > "$D/java/com/example/corridarapida/UberService.kt" << 'EOF'
+          package com.example.corridarapida
+
+          import android.accessibilityservice.AccessibilityService
+          import android.graphics.Color
+          import android.graphics.PixelFormat
+          import android.graphics.drawable.GradientDrawable
+          import android.os.Handler
+          import android.os.Looper
+          import android.view.Gravity
+          import android.view.WindowManager
+          import android.view.accessibility.AccessibilityEvent
+          import android.view.accessibility.AccessibilityNodeInfo
+          import android.widget.LinearLayout
+          import android.widget.TextView
+
+          class UberService : AccessibilityService() {
+
+              private val uber = "com.ubercab.driver"
+              private val totalRx = Regex("(\\d+)\\s*min\\w*\\s*[•·]\\s*([\\d.,]+)\\s*km")
+              private val trechoRx = Regex("(\\d+)\\s*min\\w*\\s*\\(([\\d.,]+)\\s*km\\)")
+              private val precoRx = Regex("R\\$\\s*(\\d+(?:[.,]\\d+)?)")
+              private val notaRx = Regex("\\b([1-5][.,]\\d{1,2})\\s*\\(\\d[\\d.,]*\\)")
+              private val notaLinhaRx = Regex("^([1-5][.,]\\d{2})$")
+              
+              private val cinza = Color.rgb(50, 50, 50)
+              private val titulos = arrayOf("ACEITA", "LIMITE", "RECUSA")
+              private val coresFundo = intArrayOf(
+                  Color.parseColor("#E60E6638"),
+                  Color.parseColor("#E6B86B00"),
+                  Color.parseColor("#E6C62828")
+              )
+              
+              private var cardLayout: LinearLayout? = null
+              private var txtVeredito: TextView? = null
+              private var txtMetricas: TextView? = null
+              private var txtDetalhes: TextView? = null
+              
+              private var ultimoProcessamento = 0L
+              private val handler = Handler(Looper.getMainLooper())
+              private var runnableAnalise: Runnable? = null
+              private var runnableEsconder: Runnable? = null
+
+              private fun estaAtivo(): Boolean {
+                  val sp = getSharedPreferences("cfg", MODE_PRIVATE)
+                  val expMillis = sp.getLong("exp_millis",
