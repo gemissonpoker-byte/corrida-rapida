@@ -16,8 +16,123 @@ jobs:
           gradle-version: 8.7
       - name: Unzip project
         run: unzip -q CorridaRapida-Android.zip
-      - name: Fix compile error
-        run: sed -i 's/\boverlay\b/faixa/g' CorridaRapida/app/src/main/java/com/example/corridarapida/UberService.kt
+      - name: Atualizar leitor
+        run: |
+          cat > CorridaRapida/app/src/main/java/com/example/corridarapida/UberService.kt <<'EOF'
+          package com.example.corridarapida
+
+          import android.accessibilityservice.AccessibilityService
+          import android.graphics.Color
+          import android.graphics.PixelFormat
+          import android.view.Gravity
+          import android.view.WindowManager
+          import android.view.accessibility.AccessibilityEvent
+          import android.view.accessibility.AccessibilityNodeInfo
+          import android.widget.TextView
+
+          class UberService : AccessibilityService() {
+
+              private val totalRx = Regex("(\\d+)\\s*min\\w*\\s*[•·]\\s*([\\d.,]+)\\s*km")
+              private val trechoRx = Regex("(\\d+)\\s*min\\w*\\s*\\(([\\d.,]+)\\s*km\\)")
+              private val precoRx = Regex("R\\$\\s*(\\d+(?:[.,]\\d+)?)")
+              private var faixa: TextView? = null
+
+              override fun onAccessibilityEvent(e: AccessibilityEvent) {
+                  val pkg = e.packageName?.toString() ?: return
+                  if (pkg != "com.ubercab.driver") {
+                      if (pkg != packageName) esconder()
+                      return
+                  }
+                  val root = rootInActiveWindow ?: return
+                  val sb = StringBuilder()
+                  coletar(root, sb)
+                  analisar(sb.toString())
+              }
+
+              private fun coletar(n: AccessibilityNodeInfo?, sb: StringBuilder) {
+                  if (n == null) return
+                  n.text?.let { sb.append(it).append('\n') }
+                  n.contentDescription?.let { sb.append(it).append('\n') }
+                  for (i in 0 until n.childCount) coletar(n.getChild(i), sb)
+              }
+
+              private fun num(s: String): Double =
+                  (if (s.contains(",")) s.replace(".", "").replace(",", ".") else s).toDoubleOrNull() ?: 0.0
+
+              private fun analisar(txt: String) {
+                  if (!txt.contains("Aceitar")) { esconder(); return }
+                  val cinza = Color.rgb(90, 90, 90)
+                  val linhas = txt.lines().map { it.trim() }
+                  val preco = linhas.firstNotNullOfOrNull { l -> precoRx.matchEntire(l)?.groupValues?.get(1) }?.let(::num)
+                      ?: linhas.firstOrNull { it.contains("R$") && !it.contains("/km") && !it.startsWith("+") }
+                          ?.let { precoRx.find(it)?.groupValues?.get(1) }?.let(::num)
+
+                  var min = 0.0
+                  var km = 0.0
+                  val tot = totalRx.find(txt)
+                  if (tot != null) {
+                      min = tot.groupValues[1].toDouble()
+                      km = num(tot.groupValues[2])
+                  } else {
+                      val t = trechoRx.findAll(txt).take(2).toList()
+                      if (t.size == 2) {
+                          min = t.sumOf { it.groupValues[1].toDouble() }
+                          km = t.sumOf { num(it.groupValues[2]) }
+                      }
+                  }
+                  if (preco == null || preco <= 0 || min <= 0 || km <= 0) {
+                      mostrar("Oferta não lida", cinza)
+                      return
+                  }
+
+                  val sp = getSharedPreferences("cfg", MODE_PRIVATE)
+                  val metaKm = sp.getFloat("minKm", 1.8f)
+                  val metaH = sp.getFloat("minH", 35f)
+                  val rkm = preco / km
+                  val rh = preco / (min / 60.0)
+                  val okKm = rkm >= metaKm
+                  val okH = rh >= metaH
+                  val (titulo, cor) = when {
+                      okKm && okH -> "ACEITA" to Color.rgb(18, 161, 80)
+                      okKm || okH -> "LIMITE" to Color.rgb(224, 154, 0)
+                      else -> "RECUSA" to Color.rgb(211, 47, 47)
+                  }
+                  mostrar("$titulo\nR$%.2f/km · R$%.0f/h".format(rkm, rh), cor)
+              }
+
+              private fun mostrar(texto: String, cor: Int) {
+                  val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+                  val v = faixa ?: TextView(this).apply {
+                      textSize = 22f
+                      setTextColor(Color.WHITE)
+                      gravity = Gravity.CENTER
+                      setPadding(40, 24, 40, 24)
+                      val lp = WindowManager.LayoutParams(
+                          WindowManager.LayoutParams.WRAP_CONTENT,
+                          WindowManager.LayoutParams.WRAP_CONTENT,
+                          WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                          WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                              WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                          PixelFormat.TRANSLUCENT
+                      ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = 180 }
+                      wm.addView(this, lp)
+                      faixa = this
+                  }
+                  v.text = texto
+                  v.setBackgroundColor(cor)
+              }
+
+              private fun esconder() {
+                  faixa?.let {
+                      try { (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(it) } catch (_: Exception) {}
+                      faixa = null
+                  }
+              }
+
+              override fun onInterrupt() { esconder() }
+              override fun onDestroy() { esconder(); super.onDestroy() }
+          }
+          EOF
       - name: Build
         working-directory: CorridaRapida
         run: gradle assembleDebug --no-daemon
